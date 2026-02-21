@@ -20,8 +20,6 @@
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 #endif
 
-#define ROUNDED_CORNER_RADIUS 10
-
 /* Stores the X11 window ID of the currently focused window */
 xcb_window_t focused_id = XCB_NONE;
 
@@ -982,12 +980,12 @@ static void set_shape_state(Con *con, bool need_reshape) {
         return;
     }
 
-    if (need_reshape && con_is_leaf(con) && ROUNDED_CORNER_RADIUS > 0) {
+    if (need_reshape && con_is_leaf(con) && config.border_radius > 0) {
         /* Apply rounded corners to all leaf containers. */
         x_apply_rounded_shape(con->frame.id,
                                (uint16_t)con->rect.width,
                                (uint16_t)con->rect.height,
-                               ROUNDED_CORNER_RADIUS);
+                               config.border_radius);
 
         /* If the client window also has a custom shape, intersect it with the
          * rounded shape so the border and rounded outline are both respected. */
@@ -1022,7 +1020,7 @@ static void set_shape_state(Con *con, bool need_reshape) {
         /* Remove the shape when container is no longer floating.
          * With rounded corners enabled, the bounding shape is always applied
          * so we only remove it when the radius is 0. */
-        if (ROUNDED_CORNER_RADIUS == 0 && con->window->shaped) {
+        if (config.border_radius == 0 && con->window->shaped) {
             x_unshape_frame(con, XCB_SHAPE_SK_BOUNDING);
         }
         if (con->window->input_shaped) {
