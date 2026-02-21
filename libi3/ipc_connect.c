@@ -37,7 +37,11 @@ int ipc_connect(const char *socket_path) {
     }
 
     if (path == NULL) {
+<<<<<<< HEAD
         err(EXIT_FAILURE, "Could not determine i3 socket path");
+=======
+        path = sstrdup("@TERMUX_PREFIX@/tmp/i3-ipc.sock");
+>>>>>>> patch
     }
 
     int sockfd = ipc_connect_impl(path);
