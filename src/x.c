@@ -16,6 +16,12 @@
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 #endif
 
+#ifndef MIN
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
+#endif
+
+#define ROUNDED_CORNER_RADIUS 10
+
 /* Stores the X11 window ID of the currently focused window */
 xcb_window_t focused_id = XCB_NONE;
 
@@ -866,6 +872,73 @@ static void set_maximized_state(Con *con) {
 }
 
 /*
+ * Apply a rounded bounding shape to the given frame window using a 1-bit
+ * depth pixmap. The four quarter-circle corners are drawn with arcs and the
+ * rectangular body regions fill the rest.
+ */
+static void x_apply_rounded_shape(xcb_window_t frame_id, uint16_t width, uint16_t height, int radius) {
+    /* Clamp radius so arcs fit inside the window.
+     * After clamping: radius <= MIN(width, height) / 2, so 2*radius <= MIN(w,h),
+     * guaranteeing width - 2*radius >= 0 and height - 2*radius >= 0. */
+    int max_radius = (int)(MIN(width, height)) / 2;
+    if (radius > max_radius) {
+        radius = max_radius;
+    }
+    if (radius <= 0) {
+        return;
+    }
+    assert(2 * radius <= (int)width && 2 * radius <= (int)height);
+
+    xcb_pixmap_t pixmap = xcb_generate_id(conn);
+    xcb_create_pixmap(conn, 1, pixmap, root, width, height);
+
+    xcb_gcontext_t gc = xcb_generate_id(conn);
+    uint32_t values[2];
+    /* foreground=0 (transparent) */
+    values[0] = 0;
+    values[1] = 0;
+    xcb_create_gc(conn, gc, pixmap, XCB_GC_FOREGROUND | XCB_GC_BACKGROUND, values);
+
+    /* Clear pixmap to 0 (excluded from shape). */
+    xcb_rectangle_t full = {0, 0, width, height};
+    xcb_poly_fill_rectangle(conn, pixmap, gc, 1, &full);
+
+    /* Switch foreground to 1 (included in shape). */
+    values[0] = 1;
+    xcb_change_gc(conn, gc, XCB_GC_FOREGROUND, values);
+
+    /* Draw the three rectangular body regions. */
+    xcb_rectangle_t rects[3] = {
+        /* center strip: full height, between left and right arcs */
+        {radius, 0, (uint16_t)(width - 2 * radius), height},
+        /* left strip: between top and bottom arcs */
+        {0, (int16_t)radius, (uint16_t)radius, (uint16_t)(height - 2 * radius)},
+        /* right strip: between top and bottom arcs */
+        {(int16_t)(width - radius), (int16_t)radius, (uint16_t)radius, (uint16_t)(height - 2 * radius)},
+    };
+    xcb_poly_fill_rectangle(conn, pixmap, gc, 3, rects);
+
+    /* Draw the four quarter-circle corners. */
+    xcb_arc_t arcs[4] = {
+        /* top-left */
+        {0, 0, (uint16_t)(2 * radius), (uint16_t)(2 * radius), 90 * 64, 90 * 64},
+        /* top-right */
+        {(int16_t)(width - 2 * radius), 0, (uint16_t)(2 * radius), (uint16_t)(2 * radius), 0, 90 * 64},
+        /* bottom-left */
+        {0, (int16_t)(height - 2 * radius), (uint16_t)(2 * radius), (uint16_t)(2 * radius), 180 * 64, 90 * 64},
+        /* bottom-right */
+        {(int16_t)(width - 2 * radius), (int16_t)(height - 2 * radius), (uint16_t)(2 * radius), (uint16_t)(2 * radius), 270 * 64, 90 * 64},
+    };
+    xcb_poly_fill_arc(conn, pixmap, gc, 4, arcs);
+
+    xcb_shape_mask(conn, XCB_SHAPE_SO_SET, XCB_SHAPE_SK_BOUNDING,
+                   frame_id, 0, 0, pixmap);
+
+    xcb_free_gc(conn, gc);
+    xcb_free_pixmap(conn, pixmap);
+}
+
+/*
  * Set the container frame shape as the union of the window shape and the
  * shape of the frame borders.
  */
@@ -909,8 +982,34 @@ static void set_shape_state(Con *con, bool need_reshape) {
         return;
     }
 
-    if (need_reshape && con_is_floating(con)) {
-        /* We need to reshape the window frame only if it already has shape. */
+    if (need_reshape && con_is_leaf(con) && ROUNDED_CORNER_RADIUS > 0) {
+        /* Apply rounded corners to all leaf containers. */
+        x_apply_rounded_shape(con->frame.id,
+                               (uint16_t)con->rect.width,
+                               (uint16_t)con->rect.height,
+                               ROUNDED_CORNER_RADIUS);
+
+        /* If the client window also has a custom shape, intersect it with the
+         * rounded shape so the border and rounded outline are both respected. */
+        if (con->window->shaped) {
+            xcb_shape_combine(conn, XCB_SHAPE_SO_INTERSECT, XCB_SHAPE_SK_BOUNDING, XCB_SHAPE_SK_BOUNDING,
+                              con->frame.id,
+                              con->window_rect.x + con->border_width,
+                              con->window_rect.y + con->border_width,
+                              con->window->id);
+            xcb_rectangle_t rectangles[4];
+            size_t rectangles_count = x_get_border_rectangles(con, rectangles);
+            if (rectangles_count) {
+                xcb_shape_rectangles(conn, XCB_SHAPE_SO_UNION, XCB_SHAPE_SK_BOUNDING,
+                                     XCB_CLIP_ORDERING_UNSORTED, con->frame.id,
+                                     0, 0, rectangles_count, rectangles);
+            }
+        }
+        if (con->window->input_shaped) {
+            x_shape_frame(con, XCB_SHAPE_SK_INPUT);
+        }
+    } else if (need_reshape && con_is_floating(con)) {
+        /* Fallback: original behaviour for shaped floating windows when radius is 0. */
         if (con->window->shaped) {
             x_shape_frame(con, XCB_SHAPE_SK_BOUNDING);
         }
@@ -920,8 +1019,10 @@ static void set_shape_state(Con *con, bool need_reshape) {
     }
 
     if (state->was_floating && !con_is_floating(con)) {
-        /* Remove the shape when container is no longer floating. */
-        if (con->window->shaped) {
+        /* Remove the shape when container is no longer floating.
+         * With rounded corners enabled, the bounding shape is always applied
+         * so we only remove it when the radius is 0. */
+        if (ROUNDED_CORNER_RADIUS == 0 && con->window->shaped) {
             x_unshape_frame(con, XCB_SHAPE_SK_BOUNDING);
         }
         if (con->window->input_shaped) {
@@ -1009,6 +1110,9 @@ void x_push_node(Con *con) {
 
     /* We need to set shape when container becomes floating. */
     need_reshape |= con_is_floating(con) && !state->was_floating;
+
+    /* We need to set shape on initial mapping for all containers with windows. */
+    need_reshape |= state->initial && con->window != NULL;
 
     /* The pixmap of a borderless leaf container will not be used except
      * for the titlebar in a stack or tabs (issue #1013). */
