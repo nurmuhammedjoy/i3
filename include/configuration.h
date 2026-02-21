@@ -280,6 +280,9 @@ struct Config {
 
     /* Disable gaps if there is only one container on the workspace */
     smart_gaps_t smart_gaps;
+
+    /* Rounded corner radius for window frames (0 = disabled) */
+    int border_radius;
 };
 
 /**
