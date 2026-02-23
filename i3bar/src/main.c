@@ -92,17 +92,7 @@ static void sig_cb(struct ev_loop *loop, ev_signal *watcher, int revents) {
 }
 
 int main(int argc, char **argv) {
-<<<<<<< HEAD
     char *socket_path = NULL;
-=======
-    int opt;
-    int option_index = 0;
-    char *socket_path = getenv("I3SOCK");
-    if (socket_path != NULL) {
-        socket_path = sstrdup(socket_path);
-    }
-    char *i3_default_sock_path = "@TERMUX_PREFIX@/tmp/i3-ipc.sock";
->>>>>>> patch
 
     /* Initialize the standard config to use 0 as default */
     memset(&config, '\0', sizeof(config_t));
@@ -163,7 +153,7 @@ int main(int argc, char **argv) {
     }
 
     if (socket_path == NULL) {
-        char *i3_default_sock_path = "/tmp/i3-ipc.sock";
+        char *i3_default_sock_path = "@TERMUX_PREFIX@/tmp/i3-ipc.sock";
         ELOG("No socket path specified, default to %s\n", i3_default_sock_path);
         socket_path = sstrdup(i3_default_sock_path);
     }
