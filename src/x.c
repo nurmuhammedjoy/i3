@@ -10,6 +10,7 @@
  */
 #include "all.h"
 
+#include <math.h>
 #include <unistd.h>
 
 #ifndef MAX
@@ -597,6 +598,52 @@ void x_draw_decoration(Con *con) {
             } else if (p->parent_layout == L_SPLITV) {
                 draw_util_rectangle(&(con->frame_buffer), p->color->indicator,
                                     br.x, r->height + (br.height + br.y), r->width + br.width, -(br.height + br.y));
+            }
+        }
+
+        /* When rounded corners are enabled the straight border strips leave a
+         * gap in each corner arc.  Fill those gaps with border colour now by
+         * painting a filled quarter-circle at every corner. The inner portion
+         * that falls inside the content area is covered by the child window. */
+        if (config.border_radius > 0) {
+            int radius = config.border_radius;
+            int max_radius = (int)(MIN(r->width, r->height)) / 2;
+            if (radius > max_radius)
+                radius = max_radius;
+            if (radius > 0) {
+                double frame_width = r->width, frame_height = r->height;
+                color_t bc = p->color->child_border;
+                cairo_t *cr = con->frame_buffer.cr;
+                cairo_save(cr);
+                cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+                cairo_set_source_rgba(cr, bc.red, bc.green, bc.blue, bc.alpha);
+
+                /* Top-left */
+                cairo_move_to(cr, radius, radius);
+                cairo_arc_negative(cr, radius, radius, radius, -M_PI / 2.0, M_PI);
+                cairo_close_path(cr);
+                cairo_fill(cr);
+
+                /* Top-right */
+                cairo_move_to(cr, frame_width - radius, radius);
+                cairo_arc_negative(cr, frame_width - radius, radius, radius, 0, -M_PI / 2.0);
+                cairo_close_path(cr);
+                cairo_fill(cr);
+
+                /* Bottom-left */
+                cairo_move_to(cr, radius, frame_height - radius);
+                cairo_arc_negative(cr, radius, frame_height - radius, radius, M_PI, M_PI / 2.0);
+                cairo_close_path(cr);
+                cairo_fill(cr);
+
+                /* Bottom-right */
+                cairo_move_to(cr, frame_width - radius, frame_height - radius);
+                cairo_arc_negative(cr, frame_width - radius, frame_height - radius, radius, M_PI / 2.0, 0);
+                cairo_close_path(cr);
+                cairo_fill(cr);
+
+                CAIRO_SURFACE_FLUSH(con->frame_buffer.surface);
+                cairo_restore(cr);
             }
         }
     }
